@@ -1,52 +1,95 @@
 #!/usr/bin/env python3
-"""news-image-20261119 entry (Python 3.13, standard library only).
+"""Ship the vendored infographic as the competition entry.
 
-The entry image is vendored in this repository as entry.png: a
-1024x1024 infographic summing up Thursday 19 November 2026's world
-news -- Trump, Xi and Putin hold their first-ever trilateral in
-Shenzhen, GTA VI begins its global rollout, Cyclone Akvan bears
-down on India's east coast, and the US-Iran war at sea goes on
-into day 265.
+Copies ``entry.png`` (built by ``draw_news.py``) into the harness output
+directory and verifies the copy byte-for-byte, so a truncated or corrupted
+write can never be submitted silently.
 
-This program copies that image, byte for byte, to /output/entry.png
-(or $MAKEFUN_OUTPUT_DIR). It makes no network calls and writes
-identical bytes on every run.
-
-The image itself is drawn by draw_news.py (Pillow, build time only);
-main.py needs nothing beyond the standard library at run time.
+Stdlib only. No network, no randomness: two runs produce identical output.
 """
 
 import hashlib
 import os
 import shutil
+import struct
+import sys
+from pathlib import Path
 
-HERE = os.path.dirname(os.path.abspath(__file__))
-SOURCE = os.path.join(HERE, "entry.png")
-OUT_DIR = os.environ.get("MAKEFUN_OUTPUT_DIR", "/output")
-TARGET = os.path.join(OUT_DIR, "entry.png")
+HERE = Path(__file__).resolve().parent
+SOURCE = HERE / "entry.png"
+
+PNG_MAGIC = b"\x89PNG\r\n\x1a\n"
+EXPECTED_WIDTH = 1024
+EXPECTED_HEIGHT = 1024
+
+MAX_BYTES = 1_048_576  # 1 MiB entry cap
+FALLBACK_OUT = Path("/output")
 
 
-def _sha256(path):
-    digest = hashlib.sha256()
-    with open(path, "rb") as fh:
-        for chunk in iter(lambda: fh.read(65536), b""):
-            digest.update(chunk)
-    return digest.hexdigest()
+def check_png(path: Path) -> None:
+    """Reject anything that is not a 1024x1024 PNG before copying.
+
+    Reads the 8-byte magic and the IHDR chunk (width/height as big-endian
+    uint32 at bytes 16..24) with the stdlib only.
+    """
+    head = path.read_bytes()[:33]
+    if head[:8] != PNG_MAGIC:
+        raise ValueError("not a PNG file (bad magic)")
+    if len(head) < 24 or head[12:16] != b"IHDR":
+        raise ValueError("not a PNG file (missing IHDR)")
+    width, height = struct.unpack(">II", head[16:24])
+    if (width, height) != (EXPECTED_WIDTH, EXPECTED_HEIGHT):
+        raise ValueError(
+            f"wrong dimensions: {width}x{height}, "
+            f"expected {EXPECTED_WIDTH}x{EXPECTED_HEIGHT}"
+        )
 
 
-def main():
-    # The vendored image must be a whole PNG: check its magic bytes
-    # before copying, so a corrupted file fails loudly here rather
-    # than at the grader's gate.
-    with open(SOURCE, "rb") as fh:
-        assert fh.read(8) == b"\x89PNG\r\n\x1a\n", "entry.png is not a PNG"
-    os.makedirs(OUT_DIR, exist_ok=True)
-    shutil.copyfile(SOURCE, TARGET)
-    # A plain byte copy is deterministic by construction; confirm the
-    # output landed byte-identical to the vendored image.
-    assert os.path.getsize(TARGET) == os.path.getsize(SOURCE)
-    assert _sha256(TARGET) == _sha256(SOURCE)
+def output_path() -> Path:
+    """Output dir from $MAKEFUN_OUTPUT_DIR, else /output."""
+    raw = os.environ.get("MAKEFUN_OUTPUT_DIR", "").strip()
+    return (Path(raw) if raw else FALLBACK_OUT) / "entry.png"
+
+
+def digest(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def main() -> int:
+    if not SOURCE.is_file():
+        print(f"missing source image: {SOURCE}", file=sys.stderr)
+        return 1
+
+    size = SOURCE.stat().st_size
+    if size > MAX_BYTES:
+        print(f"entry.png too large: {size} bytes (max {MAX_BYTES})",
+              file=sys.stderr)
+        return 1
+    if size == 0:
+        print("entry.png is empty", file=sys.stderr)
+        return 1
+
+    try:
+        check_png(SOURCE)
+    except ValueError as exc:
+        print(f"entry.png rejected: {exc}", file=sys.stderr)
+        return 1
+
+    expected = digest(SOURCE)
+    target = output_path()
+    target.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copyfile(SOURCE, target)
+
+    copied_size = target.stat().st_size
+    copied_hash = digest(target)
+    if copied_size != size or copied_hash != expected:
+        print("copy verification failed: size or sha256 mismatch",
+              file=sys.stderr)
+        return 1
+
+    print(f"entry.png -> {target} ({copied_size} bytes, sha256 {copied_hash})")
+    return 0
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())

@@ -1,209 +1,201 @@
 #!/usr/bin/env python3
-"""Draw the news-image-20261119 entry: a 1024x1024 infographic summing
-up Thursday 19 November 2026's world news.
+"""Draw the 19 November 2026 world-news infographic.
 
-Stories (all verified against Reuters, Le Monde, IMD, NASA and AP
-reporting — see NOTES.md for sources and date discipline):
-  1. Trump, Xi and Putin hold their first-ever trilateral in Shenzhen.
-  2. GTA VI begins its global rollout, midnight by midnight.
-  3. Cyclone Akvan bears down on India's east coast.
-  4. Day 265 of the US-Iran war: Gulf attacks widen.
-  5. (strip) India-Japan 2+2 dialogue in Tokyo.
-  6. (strip) NASA confirms Voyager 1 is one light-day away.
+Layout (1024 x 1024, dark newsprint style):
+  masthead  -> big date line, gold rule
+  lead card -> the Shenzhen trilateral, full width
+  three cards in a row -> GTA VI, Cyclone Akvan, US-Iran war
+  bottom strip -> India-Japan 2+2 and Voyager 1, side by side
+  footer -> sources line
 
-Build time only. Run: python3 draw_news.py  (writes entry.png next
-to this file). Uses Pillow and DejaVu fonts; no network.
+Run: python3 draw_news.py   (writes entry.png next to this file)
+Requires Pillow at build time only; the entry itself is a static PNG.
 """
 
-import os
+from pathlib import Path
 
 from PIL import Image, ImageDraw, ImageFont
 
-HERE = os.path.dirname(os.path.abspath(__file__))
-OUT = os.path.join(HERE, "entry.png")
-
 W, H = 1024, 1024
+MARGIN = 32
+CONTENT_W = W - 2 * MARGIN
 
-NAVY = (11, 29, 51)
-NAVY_DARK = (8, 22, 40)
-PANEL = (20, 48, 76)
-PANEL_ALT = (24, 56, 88)
-GOLD = (242, 183, 5)
-WHITE = (255, 255, 255)
-BODY = (213, 222, 232)
-MUTED = (150, 168, 188)
-RULE = (242, 183, 5)
-RED = (228, 87, 46)
-TEAL = (23, 163, 152)
-AMBER = (246, 174, 45)
-CRIMSON = (196, 69, 54)
-GREEN = (46, 160, 90)
-BLUE = (46, 134, 171)
-PURPLE = (138, 90, 205)
+# --- palette ---------------------------------------------------------------
+INK = (10, 17, 34)        # page background
+PANEL = (22, 35, 61)      # card background
+PANEL_EDGE = (38, 56, 94) # card outline
+PAPER = (245, 241, 230)   # main text
+MUTED = (169, 184, 208)   # body text
+GOLD = (242, 183, 5)      # date / accents
+RED = (214, 69, 55)
+TEAL = (46, 160, 158)
+SKY = (84, 148, 220)
+VIOLET = (146, 106, 214)
 
-FONT_DIR = "/usr/share/fonts/truetype/dejavu"
+FONT_DIR = Path("/usr/share/fonts/truetype/dejavu")
 
 
-def font(name, size):
-    return ImageFont.truetype(os.path.join(FONT_DIR, name), size)
+def font(name: str, size: int) -> ImageFont.FreeTypeFont:
+    return ImageFont.truetype(str(FONT_DIR / name), size)
 
 
-F_MAST = font("DejaVuSans-Bold.ttf", 56)
-F_DATE = font("DejaVuSans-Bold.ttf", 38)
-F_KICK = font("DejaVuSans-Bold.ttf", 17)
-F_HEAD = font("DejaVuSans-Bold.ttf", 31)
-F_BODY = font("DejaVuSans.ttf", 22)
-F_STRIP_HEAD = font("DejaVuSans-Bold.ttf", 24)
+F_KICKER = font("DejaVuSans-Bold.ttf", 25)
+F_DATE = font("DejaVuSans-Bold.ttf", 56)
+F_LEAD_HEAD = font("DejaVuSans-Bold.ttf", 38)
+F_LEAD_BODY = font("DejaVuSans.ttf", 22)
+F_CARD_HEAD = font("DejaVuSans-Bold.ttf", 27)
+F_CARD_BODY = font("DejaVuSans.ttf", 19)
+F_TAG = font("DejaVuSans-Bold.ttf", 19)
+F_STRIP_LABEL = font("DejaVuSans-Bold.ttf", 22)
 F_STRIP_BODY = font("DejaVuSans.ttf", 21)
-F_FOOT = font("DejaVuSans.ttf", 18)
+F_FOOT = font("DejaVuSans.ttf", 17)
 
 
-def wrap(draw, text, fnt, max_w):
-    """Greedy word wrap returning a list of lines fitting max_w."""
-    words = text.split()
-    lines, cur = [], ""
-    for word in words:
-        trial = (cur + " " + word).strip()
+def wrap(draw: ImageDraw.ImageDraw, text: str, fnt: ImageFont.FreeTypeFont,
+         max_w: int) -> list[str]:
+    """Greedy word wrap using real text widths."""
+    lines: list[str] = []
+    current = ""
+    for word in text.split():
+        trial = f"{current} {word}".strip()
         if draw.textlength(trial, font=fnt) <= max_w:
-            cur = trial
+            current = trial
         else:
-            if cur:
-                lines.append(cur)
-            cur = word
-    if cur:
-        lines.append(cur)
+            if current:
+                lines.append(current)
+            current = word
+    if current:
+        lines.append(current)
     return lines
 
 
-def draw_panel(draw, x, y, w, h, tag, tag_color, headline, body, icon):
-    draw.rounded_rectangle([x, y, x + w, y + h], radius=18, fill=PANEL)
-    # Tag chip.
-    chip_w = draw.textlength(tag, font=F_KICK) + 26
-    draw.rounded_rectangle([x + 22, y + 20, x + 22 + chip_w, y + 52],
-                           radius=16, fill=tag_color)
-    draw.text((x + 35, y + 25), tag, font=F_KICK, fill=WHITE)
-    # Simple icon on the right of the tag row.
-    icon(draw, x + w - 78, y + 18)
-    # Headline.
-    lines = wrap(draw, headline, F_HEAD, w - 44)
-    ty = y + 66
+def draw_lines(draw: ImageDraw.ImageDraw, lines: list[str], x: int, y: int,
+               fnt: ImageFont.FreeTypeFont, fill, leading: int) -> int:
+    """Draw lines top to bottom; return the y just below the last line."""
     for line in lines:
-        draw.text((x + 22, ty), line, font=F_HEAD, fill=WHITE)
-        ty += 38
-    # Body.
-    by = ty + 8
-    for line in wrap(draw, body, F_BODY, w - 44):
-        draw.text((x + 22, by), line, font=F_BODY, fill=BODY)
-        by += 29
+        draw.text((x, y), line, font=fnt, fill=fill)
+        y += leading
+    return y
 
 
-def icon_flags(draw, x, y):
-    # Three summit flags on poles: US, China, Russia.
-    for i, col in enumerate([RED, GOLD, BLUE]):
-        px = x + 6 + i * 20
-        draw.line([px, y + 6, px, y + 58], fill=WHITE, width=3)
-        draw.polygon([(px, y + 6), (px + 17, y + 12), (px, y + 20)],
-                     fill=col)
+def tag(draw: ImageDraw.ImageDraw, x: int, y: int, label: str,
+        fill) -> int:
+    """Draw a pill tag; return its right edge."""
+    pad_x, pad_y = 14, 7
+    tw = draw.textlength(label, font=F_TAG)
+    th = F_TAG.size
+    draw.rounded_rectangle(
+        [x, y, x + tw + 2 * pad_x, y + th + 2 * pad_y],
+        radius=14, fill=fill,
+    )
+    draw.text((x + pad_x, y + pad_y - 1), label, font=F_TAG, fill=(255, 255, 255))
+    return int(x + tw + 2 * pad_x)
 
 
-def icon_controller(draw, x, y):
-    # Game controller: body, grips, d-pad and buttons.
-    draw.rounded_rectangle([x + 2, y + 18, x + 58, y + 44], radius=12,
-                           fill=PURPLE)
-    draw.polygon([(x + 6, y + 40), (x + 16, y + 40), (x + 12, y + 58),
-                  (x + 4, y + 58)], fill=PURPLE)
-    draw.polygon([(x + 44, y + 40), (x + 54, y + 40), (x + 56, y + 58),
-                  (x + 48, y + 58)], fill=PURPLE)
-    draw.rectangle([x + 10, y + 27, x + 20, y + 31], fill=WHITE)
-    draw.rectangle([x + 14, y + 23, x + 16, y + 35], fill=WHITE)
-    for bx, by in [(x + 42, y + 25), (x + 48, y + 30), (x + 42, y + 35)]:
-        draw.ellipse([bx, by, bx + 5, by + 5], fill=GOLD)
+def panel(draw: ImageDraw.ImageDraw, box) -> None:
+    draw.rounded_rectangle(box, radius=18, fill=PANEL, outline=PANEL_EDGE,
+                           width=2)
 
 
-def icon_spiral(draw, x, y):
-    # Cyclone: concentric arcs.
-    for r, col in [(28, AMBER), (21, WHITE), (14, AMBER), (7, WHITE)]:
-        draw.arc([x + 30 - r, y + 30 - r, x + 30 + r, y + 30 + r],
-                 start=20, end=300, fill=col, width=4)
+# --- small geometric icon (drawn, not pasted) -------------------------------
+
+def icon_flags(draw: ImageDraw.ImageDraw, x: int, y: int) -> None:
+    """Three small pennant flags on poles: US / China / Russia."""
+    pole_h, gap = 74, 44
+    colours = [(178, 34, 52), (222, 41, 16), (30, 90, 168)]
+    for i, colour in enumerate(colours):
+        px = x + i * gap
+        draw.line([(px, y), (px, y + pole_h)], fill=PAPER, width=4)
+        draw.polygon([(px, y), (px + 34, y + 9), (px, y + 18)], fill=colour)
 
 
-def icon_ship(draw, x, y):
-    # Tanker: hull, deck, funnel, waves.
-    draw.polygon([(x + 2, y + 34), (x + 58, y + 34), (x + 50, y + 52),
-                  (x + 10, y + 52)], fill=CRIMSON)
-    draw.rectangle([x + 38, y + 20, x + 48, y + 34], fill=WHITE)
-    draw.rectangle([x + 12, y + 26, x + 30, y + 34], fill=WHITE)
-    for wx in (x + 2, x + 24, x + 46):
-        draw.arc([wx, y + 54, wx + 12, y + 62], start=0, end=180,
-                 fill=BLUE, width=3)
+# --- build -------------------------------------------------------------------
 
+def build() -> Image.Image:
+    img = Image.new("RGB", (W, H), INK)
+    d = ImageDraw.Draw(img)
 
-def main():
-    img = Image.new("RGB", (W, H), NAVY)
-    draw = ImageDraw.Draw(img)
+    # Masthead: kicker, then the date as the hero line, gold rule below.
+    d.text((MARGIN, 30), "THE WORLD IN ONE IMAGE", font=F_KICKER, fill=GOLD)
+    d.text((MARGIN, 62), "THURSDAY 19 NOVEMBER 2026", font=F_DATE, fill=PAPER)
+    d.rectangle([MARGIN, 148, W - MARGIN, 153], fill=GOLD)
 
-    # Header band.
-    draw.rectangle([0, 0, W, 158], fill=NAVY_DARK)
-    draw.rectangle([0, 158, W, 164], fill=RULE)
-    draw.text((36, 26), "THE WORLD IN ONE IMAGE", font=F_MAST, fill=WHITE)
-    draw.text((36, 98), "THURSDAY  19  NOVEMBER  2026",
-              font=F_DATE, fill=GOLD)
+    # ---- lead story: Shenzhen trilateral -----------------------------------
+    lead = (MARGIN, 172, W - MARGIN, 424)
+    panel(d, lead)
+    lx, ly = lead[0] + 26, lead[1] + 20
+    tag(d, lx, ly, "DIPLOMACY  ·  SHENZHEN", RED)
+    icon_flags(d, lead[2] - 190, ly - 2)
+    head = wrap(d, "Trump, Xi and Putin meet in Shenzhen",
+                F_LEAD_HEAD, CONTENT_W - 52 - 200)
+    y = draw_lines(d, head, lx, ly + 48, F_LEAD_HEAD, PAPER, 46)
+    body = wrap(
+        d,
+        "The three leaders hold their first-ever trilateral on the APEC "
+        "sidelines — Ukraine, Iran, trade and AI on the table. Trump and "
+        "Putin shook hands at Wednesday's welcome event, their first "
+        "face-to-face in over a year.",
+        F_LEAD_BODY, CONTENT_W - 52)
+    draw_lines(d, body, lx, y + 10, F_LEAD_BODY, MUTED, 27)
 
-    # 2x2 story grid.
-    gx, gy = 24, 184
-    pw, ph = 476, 288
-    gap = 24
-    stories = [
-        ("DIPLOMACY  ·  SHENZHEN", RED,
-         "Trump, Xi and Putin meet in Shenzhen",
-         "The three leaders hold their first-ever trilateral on the "
-         "APEC sidelines — Ukraine, Iran, trade and AI on the table.",
-         icon_flags),
-        ("CULTURE  ·  VICE CITY", PURPLE,
-         "GTA VI rolls out around the world",
-         "After 13 years and $1bn-plus in production, the game "
-         "unlocks at midnight in each market, starting in New "
-         "Zealand — and tops Metacritic at 99.", icon_controller),
-        ("WEATHER  ·  BAY OF BENGAL", AMBER,
+    # ---- three cards in a row ----------------------------------------------
+    cards = [
+        ("CULTURE  ·  VICE CITY", VIOLET,
+         "GTA VI rolls out worldwide",
+         "After 13 years and $1bn-plus in production, it unlocks at "
+         "midnight in each market, starting in New Zealand — Metacritic 99."),
+        ("WEATHER  ·  BENGAL", TEAL,
          "Cyclone Akvan bears down on India",
-         "Extremely heavy rain is forecast for 19–20 Nov; Odisha "
-         "shuts schools and postpones exams as landfall nears, "
-         "due Friday.", icon_spiral),
-        ("CONFLICT  ·  GULF", CRIMSON,
+         "Extremely heavy rain is forecast for 19–20 Nov; Odisha shuts "
+         "schools and postpones exams as landfall nears, due Friday."),
+        ("CONFLICT  ·  GULF", RED,
          "War at sea widens — day 265",
-         "Iran has struck a US base in Kuwait and kept hitting "
-         "Bahrain; three US carriers are in the region, and Trump "
-         "says he will raise the war in Shenzhen.", icon_ship),
+         "Iran has struck a US base in Kuwait and kept hitting Bahrain; "
+         "three US carriers are in the region."),
     ]
-    for i, (tag, color, head, body, ic) in enumerate(stories):
-        x = gx + (i % 2) * (pw + gap)
-        y = gy + (i // 2) * (ph + gap)
-        draw_panel(draw, x, y, pw, ph, tag, color, head, body, ic)
+    gap = 20
+    cw = (CONTENT_W - 2 * gap) // 3
+    top, bottom = 440, 760
+    for i, (label, colour, headline, text) in enumerate(cards):
+        x0 = MARGIN + i * (cw + gap)
+        panel(d, (x0, top, x0 + cw, bottom))
+        cx, cy = x0 + 22, top + 18
+        tag(d, cx, cy, label, colour)
+        head = wrap(d, headline, F_CARD_HEAD, cw - 44)
+        y = draw_lines(d, head, cx, cy + 48, F_CARD_HEAD, PAPER, 33)
+        body = wrap(d, text, F_CARD_BODY, cw - 44)
+        draw_lines(d, body, cx, y + 10, F_CARD_BODY, MUTED, 25)
 
-    # Bottom strip: India-Japan + Voyager.
-    sy = gy + 2 * ph + gap + 12
-    draw.rounded_rectangle([gx, sy, W - gx, sy + 118], radius=18,
-                           fill=PANEL_ALT)
-    draw.text((gx + 22, sy + 14), "ALSO TODAY", font=F_STRIP_HEAD,
-              fill=GOLD)
-    draw.text((gx + 22, sy + 46),
-              "India and Japan hold their 2+2 defence and foreign "
-              "ministers' dialogue in Tokyo.",
-              font=F_STRIP_BODY, fill=BODY)
-    draw.text((gx + 22, sy + 76),
-              "NASA confirms Voyager 1 is one light-day from Earth — "
-              "16 billion miles out.",
-              font=F_STRIP_BODY, fill=BODY)
+    # ---- bottom strip: two more stories ------------------------------------
+    strip = (MARGIN, 776, W - MARGIN, 928)
+    panel(d, strip)
+    d.line([(W // 2, strip[1] + 18), (W // 2, strip[3] - 18)],
+           fill=PANEL_EDGE, width=2)
+    halves = [
+        (strip[0] + 24, "2+2 IN TOKYO",
+         "India and Japan hold their 2+2 defence and foreign ministers' "
+         "dialogue in Tokyo."),
+        (W // 2 + 24, "VOYAGER 1",
+         "NASA confirms Voyager 1 is one light-day from Earth — "
+         "16 billion miles out."),
+    ]
+    for x, label, text in halves:
+        d.text((x, strip[1] + 18), label, font=F_STRIP_LABEL, fill=GOLD)
+        body = wrap(d, text, F_STRIP_BODY, CONTENT_W // 2 - 48)
+        draw_lines(d, body, x, strip[1] + 52, F_STRIP_BODY, MUTED, 28)
 
-    # Footer.
-    fy = H - 56
-    draw.rectangle([0, fy - 14, W, H], fill=NAVY_DARK)
-    draw.text((36, fy), "Sources: Reuters · Le Monde · IMD · NASA — "
-              "every story happened or was first reported on 19 Nov 2026.",
-              font=F_FOOT, fill=MUTED)
+    # ---- footer --------------------------------------------------------------
+    d.text((MARGIN, 948),
+           "Sources: Reuters · Le Monde · IMD · NASA — every story happened "
+           "or was first reported on 19 Nov 2026.",
+           font=F_FOOT, fill=MUTED)
+    return img
 
-    img.save(OUT, format="PNG", optimize=True)
-    print("wrote", OUT, os.path.getsize(OUT), "bytes")
+
+def main() -> None:
+    out = Path(__file__).resolve().parent / "entry.png"
+    build().save(out, format="PNG", optimize=True)
+    print(f"wrote {out} ({out.stat().st_size} bytes)")
 
 
 if __name__ == "__main__":
